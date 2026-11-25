@@ -48,7 +48,30 @@ over the point. The price is the memory below, so it pays off when the overlap
 is deep, the values are constant per disk, and the queries are not coherent
 enough to sweep directly.
 
-## How it works
+## Bézier shapes
+
+The repository also holds the stabbing code from `circle_renderer`, which
+handles convex shapes bounded by cubic Béziers rather than disks:
+
+| file | what it has |
+|------|-------------|
+| `src/math/cubic.zig` | cubic, quadratic and linear root finding |
+| `src/geometry/bezier.zig` | cubic Bézier evaluation, extrema, splitting into x-monotonic pieces |
+| `src/geometry/shapes.zig` | `ConvexBezierShape`: y-interval at an x, point containment |
+| `src/stabbing/stabbable.zig` | `Stabbable`, the interface a shape offers to the tree |
+| `src/stabbing/slab.zig` | one slab and its segment tree over y |
+| `src/stabbing/tree.zig` | `StabbingTree`: slab decomposition over any `Stabbable` shapes, and the packing of it for a GPU |
+
+It is a separate structure from `DiskTree`: it keeps a list of active shapes per
+slab instead of persistent versions, and works in `f32`. Everything is exported
+from `src/root.zig`.
+
+Two things do not work as they stand. `StabbingTree.query` returns nothing,
+because `build` records each slab's active shapes without building its segment
+tree, so the `stabbing tree basic` test fails. `PackedTreeData` does not compile
+on Zig 0.16, because it uses `std.Thread.Pool`.
+
+## How the disk tree works
 
 Sweep a vertical line across the plane. It cuts each circle it meets in two
 points, one on the lower arc and one on the upper arc, and the arcs it cuts have
