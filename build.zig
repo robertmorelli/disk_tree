@@ -22,4 +22,16 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.step("bench", "Run the benchmark").dependOn(&b.addRunArtifact(bench).step);
+
+    const render = b.addExecutable(.{
+        .name = "render",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/render.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    const run_render = b.addRunArtifact(render);
+    if (b.args) |args| run_render.addArgs(args);
+    b.step("render", "Render translucent disks to a PPM image").dependOn(&run_render.step);
 }
