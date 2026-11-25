@@ -154,33 +154,27 @@ pub const Slab = struct {
         // Build tree recursively
         _ = try self.buildNode(endpoints.items, 0, @as(i32, @intCast(endpoints.items.len)) - 1);
 
-        // Insert intervals into tree
-        for (self.active_shapes.items, 0..) |shape_idx, local_idx| {
-            const interval = self.y_intervals.items[local_idx];
+        // Find ranks for each interval's endpoints
+        const ranks = try self.allocator.alloc([2]i32, self.active_shapes.items.len);
+        defer self.allocator.free(ranks);
+        for (endpoints.items, 0..) |ep, rank| {
+            ranks[ep.shape_local_idx][@intFromBool(ep.is_upper)] = @intCast(rank);
+        }
 
-            // Find ranks for this interval's endpoints
-            var lo_rank: i32 = -1;
-            var hi_rank: i32 = -1;
-
-            for (endpoints.items, 0..) |ep, rank| {
-                if (ep.shape_local_idx == local_idx) {
-                    if (!ep.is_upper) {
-                        lo_rank = @intCast(rank);
-                    } else {
-                        hi_rank = @intCast(rank);
-                    }
-                }
-            }
-
-            if (lo_rank < 0 or hi_rank < 0) continue;
-            if (lo_rank > hi_rank) {
-                const tmp = lo_rank;
-                lo_rank = hi_rank;
-                hi_rank = tmp;
-            }
-
-            _ = interval; // silence unused warning
-            try self.insertInterval(0, lo_rank, hi_rank, shape_idx);
+        // Insert intervals into tree. Each node's bucket is one contiguous
+        // range of `buckets`, so count every bucket before filling any.
+        for (self.active_shapes.items, ranks) |shape_idx, rank| {
+            self.insertInterval(0, @min(rank[0], rank[1]), @max(rank[0], rank[1]), shape_idx, .count);
+        }
+        var bucket_total: u32 = 0;
+        for (self.tree_nodes.items) |*node| {
+            node.bucket_start = bucket_total;
+            bucket_total += node.bucket_count;
+            node.bucket_count = 0;
+        }
+        try self.buckets.resize(self.allocator, bucket_total);
+        for (self.active_shapes.items, ranks) |shape_idx, rank| {
+            self.insertInterval(0, @min(rank[0], rank[1]), @max(rank[0], rank[1]), shape_idx, .fill);
         }
 
         // Add dummy bucket if empty
@@ -219,7 +213,9 @@ pub const Slab = struct {
         return node_idx;
     }
 
-    fn insertInterval(self: *Slab, node_idx: i32, lo_rank: i32, hi_rank: i32, shape_idx: u32) !void {
+    const InsertPass = enum { count, fill };
+
+    fn insertInterval(self: *Slab, node_idx: i32, lo_rank: i32, hi_rank: i32, shape_idx: u32, pass: InsertPass) void {
         if (node_idx < 0 or node_idx >= @as(i32, @intCast(self.tree_nodes.items.len))) {
             return;
         }
@@ -230,11 +226,9 @@ pub const Slab = struct {
 
         if (lo_rank <= node_lo and node_hi <= hi_rank) {
             // Fully covered - add to bucket
-            // Update bucket_start if this is first item
-            if (node.bucket_count == 0) {
-                node.bucket_start = @intCast(self.buckets.items.len);
+            if (pass == .fill) {
+                self.buckets.items[node.bucket_start + node.bucket_count] = shape_idx;
             }
-            try self.buckets.append(self.allocator, shape_idx);
             node.bucket_count += 1;
             return;
         }
@@ -244,10 +238,10 @@ pub const Slab = struct {
         const right_child = node.right_child;
 
         if (lo_rank <= mid and left_child >= 0) {
-            try self.insertInterval(left_child, lo_rank, hi_rank, shape_idx);
+            self.insertInterval(left_child, lo_rank, hi_rank, shape_idx, pass);
         }
         if (hi_rank > mid and right_child >= 0) {
-            try self.insertInterval(right_child, lo_rank, hi_rank, shape_idx);
+            self.insertInterval(right_child, lo_rank, hi_rank, shape_idx, pass);
         }
     }
 

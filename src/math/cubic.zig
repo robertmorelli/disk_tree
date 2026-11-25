@@ -106,43 +106,34 @@ pub fn solveCubic(a: f32, b: f32, c: f32, d: f32) CubicRoots {
     return result;
 }
 
-/// Solve cubic and find root in [0, 1] range, with Newton refinement.
-/// Returns the best root in [0, 1], clamped.
+/// Find the t in [0, 1] where a*t^3 + b*t^2 + c*t + d equals x_target, for a
+/// cubic that is monotonic over [0, 1]. Returns the nearer end if the target is
+/// outside the cubic's range there.
 pub fn solveCubicInUnit(a: f32, b: f32, c: f32, d: f32, x_target: f32) f32 {
-    const roots = solveCubic(a, b, c, d - x_target);
+    const f0 = d - x_target;
+    const f1 = a + b + c + d - x_target;
+    if (f0 == 0) return 0;
+    if (f1 == 0) return 1;
+    if ((f0 < 0) == (f1 < 0)) return if (@abs(f0) < @abs(f1)) 0 else 1;
 
-    // Find root closest to [0, 1]
-    var best_root: f32 = 0.5;
-    var best_dist: f32 = math.floatMax(f32);
-
-    for (roots.slice()) |root| {
-        const dist = if (root < 0) -root else if (root > 1) root - 1 else 0;
-        if (dist < best_dist) {
-            best_dist = dist;
-            best_root = root;
-        }
-    }
-
-    // Clamp to [0, 1]
-    var t = std.math.clamp(best_root, 0.0, 1.0);
-
-    // Newton-Raphson refinement
+    // Newton-Raphson, bisecting whenever a step would leave the bracket.
+    var lo: f32 = 0;
+    var hi: f32 = 1;
+    var t = f0 / (f0 - f1);
     var iter: u32 = 0;
-    while (iter < 5) : (iter += 1) {
-        const t2 = t * t;
-        const t3 = t2 * t;
-        const f = a * t3 + b * t2 + c * t + (d - x_target);
-        const fp = 3.0 * a * t2 + 2.0 * b * t + c;
+    while (iter < 48) : (iter += 1) {
+        const f = ((a * t + b) * t + c) * t + f0;
+        if (f == 0) break;
+        if ((f < 0) == (f0 < 0)) lo = t else hi = t;
 
-        if (@abs(fp) < 1e-10) break;
-
-        const delta = f / fp;
-        t = t - delta;
-
-        if (@abs(delta) < 1e-7) break;
+        const fp = (3.0 * a * t + 2.0 * b) * t + c;
+        var next = t - f / fp;
+        if (!(next > lo and next < hi)) next = lo + (hi - lo) / 2.0;
+        if (next == t) break;
+        t = next;
     }
 
-    return std.math.clamp(t, 0.0, 1.0);
+    return t;
 }
 
 // Tests

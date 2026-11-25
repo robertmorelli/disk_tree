@@ -389,6 +389,18 @@ pub const StabbingTree = struct {
 
         // Coalesce adjacent slabs with identical active shapes
         try self.coalesceSlabs();
+
+        // Build each slab's segment tree. A shape's y-interval changes across
+        // the slab, so the tree is built over each shape's full y-extent; the
+        // containment test in query() makes the answer exact.
+        for (self.slabs.items) |*slab| {
+            try slab.y_intervals.ensureTotalCapacity(self.allocator, slab.active_shapes.items.len);
+            for (slab.active_shapes.items) |shape_idx| {
+                const bbox = shapes[shape_idx].boundingBox();
+                slab.y_intervals.appendAssumeCapacity(YInterval.init(bbox.y_min, bbox.y_max));
+            }
+            try slab.buildTree();
+        }
         if (self.profile_enabled) {
             const now = nanoTimestamp();
             self.last_build_profile.coalesce_ms = @as(f64, @floatFromInt(now - t_last)) / 1_000_000.0;
@@ -581,8 +593,6 @@ pub const PackedTreeData = struct {
     slab_base_buf: std.ArrayList(u32),
     shape_bin_min_buf: std.ArrayList(u32),
     shape_bin_max_buf: std.ArrayList(u32),
-    thread_pool: std.Thread.Pool,
-    thread_pool_inited: bool,
 
     pub fn init(allocator: Allocator) PackedTreeData {
         return .{
@@ -610,8 +620,6 @@ pub const PackedTreeData = struct {
             .slab_base_buf = .empty,
             .shape_bin_min_buf = .empty,
             .shape_bin_max_buf = .empty,
-            .thread_pool = undefined,
-            .thread_pool_inited = false,
         };
     }
 
@@ -638,10 +646,6 @@ pub const PackedTreeData = struct {
         self.slab_base_buf.deinit(self.allocator);
         self.shape_bin_min_buf.deinit(self.allocator);
         self.shape_bin_max_buf.deinit(self.allocator);
-        if (self.thread_pool_inited) {
-            self.thread_pool.deinit();
-            self.thread_pool_inited = false;
-        }
     }
 
     /// Pack tree and shapes into GPU-ready buffers
@@ -962,13 +966,9 @@ pub const PackedTreeData = struct {
                 const slab_base = self.slab_base_buf.items;
 
                 const cpu_count = std.Thread.getCpuCount() catch 1;
-                const worker_count = @min(cpu_count, slab_count);
-                if (!self.thread_pool_inited) {
-                    try self.thread_pool.init(.{ .allocator = self.allocator });
-                    self.thread_pool_inited = true;
-                }
-                const use_threads = (worker_count > 1) and self.thread_pool_inited;
-                const pool = &self.thread_pool;
+                var threads: [64]std.Thread = undefined;
+                const worker_count = @min(cpu_count, slab_count, threads.len + 1);
+                const use_threads = worker_count > 1;
 
                 var t_count_start: i128 = 0;
                 var t_prefix_start: i128 = 0;
@@ -1066,13 +1066,13 @@ pub const PackedTreeData = struct {
                 };
 
                 if (use_threads) {
-                    var wg = std.Thread.WaitGroup{};
                     var next = std.atomic.Value(usize).init(0);
-                    var t: usize = 0;
-                    while (t < worker_count) : (t += 1) {
-                        pool.spawnWg(&wg, CountCtx.worker, .{ &count_ctx, &next });
+                    var spawned: usize = 0;
+                    while (spawned + 1 < worker_count) : (spawned += 1) {
+                        threads[spawned] = std.Thread.spawn(.{}, CountCtx.worker, .{ &count_ctx, &next }) catch break;
                     }
-                    wg.wait();
+                    CountCtx.worker(&count_ctx, &next);
+                    for (threads[0..spawned]) |thread| thread.join();
                 } else {
                     var slab_index: usize = 0;
                     while (slab_index < slab_count) : (slab_index += 1) {
@@ -1338,13 +1338,13 @@ pub const PackedTreeData = struct {
                 };
 
                 if (use_threads) {
-                    var wg = std.Thread.WaitGroup{};
                     var next = std.atomic.Value(usize).init(0);
-                    var t: usize = 0;
-                    while (t < worker_count) : (t += 1) {
-                        pool.spawnWg(&wg, FillCtx.worker, .{ &fill_ctx, &next });
+                    var spawned: usize = 0;
+                    while (spawned + 1 < worker_count) : (spawned += 1) {
+                        threads[spawned] = std.Thread.spawn(.{}, FillCtx.worker, .{ &fill_ctx, &next }) catch break;
                     }
-                    wg.wait();
+                    FillCtx.worker(&fill_ctx, &next);
+                    for (threads[0..spawned]) |thread| thread.join();
                 } else {
                     var slab_index2: usize = 0;
                     var node_lists = std.ArrayList(u32).empty;

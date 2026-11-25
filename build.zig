@@ -33,5 +33,5 @@ pub fn build(b: *std.Build) void {
     });
     const run_render = b.addRunArtifact(render);
     if (b.args) |args| run_render.addArgs(args);
-    b.step("render", "Render translucent disks to a PPM image").dependOn(&run_render.step);
+    b.step("render", "Render translucent disks or paths to a PPM image").dependOn(&run_render.step);
 }
