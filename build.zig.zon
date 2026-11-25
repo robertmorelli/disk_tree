@@ -1,0 +1,7 @@
+.{
+    .name = .disk_tree,
+    .version = "0.1.0",
+    .fingerprint = 0xbba89363e0b0f60f,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}
